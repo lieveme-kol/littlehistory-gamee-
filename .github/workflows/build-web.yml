@@ -1,0 +1,84 @@
+name: Build and publish Godot Web game (changed scripts)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "littlehistory-changed-scripts.zip"
+      - ".github/workflows/build-web.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: true
+
+jobs:
+  export-web:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.2 and Web export templates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          GODOT_VERSION="4.7.2"
+          mkdir -p "$RUNNER_TEMP/godot" "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          cd "$RUNNER_TEMP/godot"
+
+          curl -L --fail --retry 3 \
+            -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          GODOT_BIN="$(find . -maxdepth 2 -type f -name 'Godot_v*linux.x86_64' | head -n 1)"
+          test -n "$GODOT_BIN"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$RUNNER_TEMP/godot/$GODOT_BIN" >> "$GITHUB_ENV"
+
+          curl -L --fail --retry 3 \
+            -o templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir templates
+          unzip -q templates.tpz -d templates
+          cp -a templates/templates/. "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      - name: Extract game source
+        run: |
+          set -euxo pipefail
+          mkdir -p source
+          unzip -q littlehistory-changed-scripts.zip -d source
+          test -f source/littlehistory/project.godot
+          mkdir -p source/littlehistory/dist
+
+      - name: Import project resources
+        run: |
+          "$GODOT_BIN" --headless --editor --path source/littlehistory --quit
+
+      - name: Export Web build
+        run: |
+          set -euxo pipefail
+          "$GODOT_BIN" --headless --path source/littlehistory \
+            --export-release "Web" dist/index.html
+          test -s source/littlehistory/dist/index.html
+          find source/littlehistory/dist -maxdepth 1 -type f -printf '%f %s bytes\n'
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: source/littlehistory/dist/
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    needs: export-web
+    steps:
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@v4
